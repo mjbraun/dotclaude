@@ -1,0 +1,15 @@
+# Ignore everything by default
+*
+
+# Allow these specific files/directories
+!.gitignore
+!CLAUDE.md
+!skills/
+!skills/**
+!mcp-servers/
+!mcp-servers/**
+
+# But still ignore these within allowed dirs
+.DS_Store
+__pycache__/
+*.pyc
