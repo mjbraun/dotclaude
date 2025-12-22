@@ -15,6 +15,15 @@ from typing import AsyncIterator, Optional
 from mcp.server.fastmcp import FastMCP
 
 from .addon import TrafficCaptureAddon
+from .url_utils import truncate_url, is_noise_domain
+from .adb import (
+    is_adb_available,
+    list_devices as adb_list_devices,
+    get_local_ip,
+    enable_proxy as adb_enable_proxy,
+    disable_proxy as adb_disable_proxy,
+    get_current_proxy as adb_get_current_proxy,
+)
 from .certserver import CertServer
 from .openapi import generate_openapi_spec
 from .storage import TrafficStorage
@@ -200,31 +209,57 @@ def get_ca_cert() -> str:
 
 @mcp.tool()
 def list_requests(
-    limit: int = 50,
+    limit: int = 20,
     domain_filter: Optional[str] = None,
+    exclude_noise: bool = True,
+    verbose: bool = False,
 ) -> str:
     """
     List captured HTTP requests.
 
     Args:
-        limit: Maximum number of requests to return (default 50)
+        limit: Maximum number of requests to return (default 20)
         domain_filter: Only show requests matching this domain substring
+        exclude_noise: Filter out Google/gstatic/telemetry traffic (default True)
+        verbose: Show full URLs instead of compact host+path (default False)
 
     Returns:
-        JSON array of captured requests (summary view)
+        JSON array of captured requests (compact by default, verbose if requested)
     """
-    requests = _storage.list(limit=limit, domain_filter=domain_filter)
+    from urllib.parse import urlparse
 
-    summaries = [
-        {
-            "id": r.id,
-            "method": r.method,
-            "url": r.url,
-            "status": r.response_status,
-            "timestamp": r.timestamp,
-        }
-        for r in requests
-    ]
+    requests = _storage.list(limit=limit * 2 if exclude_noise else limit, domain_filter=domain_filter)
+
+    # Filter noise if requested
+    if exclude_noise:
+        requests = [r for r in requests if not is_noise_domain(r.url)][:limit]
+
+    summaries = []
+    for r in requests:
+        parsed = urlparse(r.url)
+        req_size = len(r.request_body) if r.request_body else 0
+        resp_size = len(r.response_body) if r.response_body else 0
+
+        if verbose:
+            summaries.append({
+                "id": r.id,
+                "method": r.method,
+                "url": truncate_url(r.url),
+                "status": r.response_status,
+                "req_size": req_size,
+                "resp_size": resp_size,
+            })
+        else:
+            # Compact format: just essentials
+            summaries.append({
+                "id": r.id,
+                "method": r.method,
+                "host": parsed.netloc,
+                "endpoint": truncate_url(r.url, max_query_length=16).replace(f"{parsed.scheme}://{parsed.netloc}", ""),
+                "status": r.response_status,
+                "req": req_size,
+                "resp": resp_size,
+            })
 
     return json.dumps(summaries, indent=2)
 
@@ -384,6 +419,153 @@ def stop_cert_server() -> str:
     _cert_server.stop()
     _cert_server = None
     return "Certificate server stopped"
+
+
+@mcp.tool()
+def list_android_devices() -> str:
+    """
+    List connected Android devices.
+
+    Returns:
+        JSON array of connected devices with their IDs and models
+    """
+    if not is_adb_available():
+        return json.dumps({
+            "error": "adb not found",
+            "hint": "Install Android SDK platform-tools and ensure adb is in PATH",
+        })
+
+    try:
+        devices = adb_list_devices()
+        return json.dumps([
+            {
+                "id": d.id,
+                "status": d.status,
+                "model": d.model,
+                "product": d.product,
+            }
+            for d in devices
+        ], indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def enable_device_proxy(
+    device_id: Optional[str] = None,
+    proxy_host: Optional[str] = None,
+    proxy_port: int = 8080,
+) -> str:
+    """
+    Enable global HTTP proxy on an Android device.
+
+    Configures the device to route all HTTP/HTTPS traffic through the proxy.
+    This is necessary for mitmproxy to intercept traffic.
+
+    Args:
+        device_id: Specific device ID (optional, uses first USB device if not specified)
+        proxy_host: Proxy server IP address (optional, auto-detects local IP if not specified)
+        proxy_port: Proxy server port (default 8080)
+
+    Returns:
+        Status message with the proxy configuration applied
+    """
+    if not is_adb_available():
+        return json.dumps({
+            "error": "adb not found",
+            "hint": "Install Android SDK platform-tools and ensure adb is in PATH",
+        })
+
+    # Auto-detect host IP if not provided
+    if proxy_host is None:
+        proxy_host = get_local_ip()
+
+    try:
+        success = adb_enable_proxy(proxy_host, proxy_port, device_id=device_id)
+        if success:
+            return json.dumps({
+                "status": "enabled",
+                "proxy": f"{proxy_host}:{proxy_port}",
+                "device_id": device_id or "default USB device",
+                "warning": "Remember to disable proxy before disconnecting the device!",
+            })
+        else:
+            return json.dumps({
+                "error": "Failed to enable proxy",
+                "hint": "Check if device is connected and authorized",
+            })
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def disable_device_proxy(device_id: Optional[str] = None) -> str:
+    """
+    Disable global HTTP proxy on an Android device.
+
+    Removes the proxy configuration, restoring direct network access.
+    IMPORTANT: Always call this before disconnecting the device!
+
+    Args:
+        device_id: Specific device ID (optional, uses first USB device if not specified)
+
+    Returns:
+        Status message
+    """
+    if not is_adb_available():
+        return json.dumps({
+            "error": "adb not found",
+            "hint": "Install Android SDK platform-tools and ensure adb is in PATH",
+        })
+
+    try:
+        success = adb_disable_proxy(device_id=device_id)
+        if success:
+            return json.dumps({
+                "status": "disabled",
+                "device_id": device_id or "default USB device",
+            })
+        else:
+            return json.dumps({
+                "error": "Failed to disable proxy",
+                "hint": "Check if device is connected and authorized",
+            })
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool()
+def get_device_proxy_status(device_id: Optional[str] = None) -> str:
+    """
+    Get the current proxy configuration from an Android device.
+
+    Args:
+        device_id: Specific device ID (optional, uses first USB device if not specified)
+
+    Returns:
+        Current proxy setting or indication that no proxy is configured
+    """
+    if not is_adb_available():
+        return json.dumps({
+            "error": "adb not found",
+            "hint": "Install Android SDK platform-tools and ensure adb is in PATH",
+        })
+
+    try:
+        proxy = adb_get_current_proxy(device_id=device_id)
+        if proxy:
+            return json.dumps({
+                "proxy_enabled": True,
+                "proxy": proxy,
+                "device_id": device_id or "default USB device",
+            })
+        else:
+            return json.dumps({
+                "proxy_enabled": False,
+                "device_id": device_id or "default USB device",
+            })
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def main():
