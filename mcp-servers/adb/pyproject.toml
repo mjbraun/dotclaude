@@ -1,15 +1,13 @@
-# ABOUTME: Python project configuration for mitmproxy MCP server
-# ABOUTME: Defines dependencies and build settings for traffic interception tools
+# ABOUTME: Python project configuration for ADB MCP server
+# ABOUTME: Defines dependencies and build settings for Android device tools
 
 [project]
-name = "mitmproxy-mcp"
+name = "adb-mcp"
 version = "0.1.0"
-description = "MCP server for mitmproxy traffic interception and inspection"
+description = "MCP server for Android Debug Bridge (adb) device interaction"
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.0.0",
-    "mitmproxy>=10.0.0",
-    "zeroconf>=0.131.0",
 ]
 
 [project.optional-dependencies]
@@ -19,14 +17,14 @@ dev = [
 ]
 
 [project.scripts]
-mitmproxy-mcp = "mitmproxy_mcp.server:main"
+adb-mcp = "adb_mcp.server:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mitmproxy_mcp"]
+packages = ["src/adb_mcp"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

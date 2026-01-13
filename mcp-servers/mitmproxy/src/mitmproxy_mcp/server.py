@@ -27,6 +27,7 @@ from .adb import (
 from .certserver import CertServer
 from .openapi import generate_openapi_spec
 from .storage import TrafficStorage
+from .hub_proxy import HubProxy, HubFrameStorage, OPNAMES as HUB_OPNAMES
 
 # Global state for the proxy
 _storage = TrafficStorage(max_size=5000)
@@ -34,6 +35,10 @@ _proxy_thread: Optional[Thread] = None
 _proxy_master = None
 _proxy_loop: Optional[asyncio.AbstractEventLoop] = None
 _cert_server: Optional[CertServer] = None
+
+# Global state for hub proxy
+_hub_storage = HubFrameStorage(max_size=2000)
+_hub_proxy: Optional[HubProxy] = None
 
 
 def _get_mitmproxy_ca_cert_path() -> Path:
@@ -566,6 +571,233 @@ def get_device_proxy_status(device_id: Optional[str] = None) -> str:
             })
     except Exception as e:
         return json.dumps({"error": str(e)})
+
+
+# ============================================================================
+# Sofabaton Hub Proxy Tools
+# ============================================================================
+
+
+@mcp.tool()
+def start_hub_proxy(
+    hub_ip: str,
+    hub_udp_port: int = 8102,
+    proxy_udp_port: int = 8102,
+    tcp_listen_port: int = 8200,
+) -> str:
+    """
+    Start a TCP/UDP proxy for Sofabaton X1S hub traffic capture.
+
+    The proxy will:
+    1. Advertise itself via mDNS as a fake hub
+    2. Accept connections from the Sofabaton app
+    3. Bridge traffic to the real hub while capturing all frames
+
+    To use:
+    1. Close the Sofabaton app on your phone
+    2. Start this proxy
+    3. Open the app - it should discover and connect to the proxy
+    4. All traffic will be captured for analysis
+
+    Args:
+        hub_ip: IP address of the real Sofabaton hub
+        hub_udp_port: Hub's UDP port (default 8102)
+        proxy_udp_port: Proxy's UDP port for mDNS (default 8102)
+        tcp_listen_port: Proxy's TCP port (default 8200)
+
+    Returns:
+        Status message with connection details
+    """
+    global _hub_proxy
+
+    if _hub_proxy is not None and _hub_proxy.is_running:
+        return json.dumps({
+            "error": "Hub proxy is already running",
+            "hub_ip": _hub_proxy.real_hub_ip,
+        })
+
+    _hub_storage.clear()
+
+    _hub_proxy = HubProxy(
+        real_hub_ip=hub_ip,
+        real_hub_udp_port=hub_udp_port,
+        proxy_udp_port=proxy_udp_port,
+        tcp_listen_port=tcp_listen_port,
+        storage=_hub_storage,
+    )
+
+    _hub_proxy.start()
+
+    # Give it a moment to start
+    import time
+    time.sleep(1)
+
+    if _hub_proxy.is_running:
+        return json.dumps({
+            "status": "running",
+            "hub_ip": hub_ip,
+            "proxy_ip": _hub_proxy.local_ip,
+            "udp_port": proxy_udp_port,
+            "tcp_port": tcp_listen_port,
+            "mdns_name": "X1-HUB-PROXY",
+            "instructions": [
+                "1. Close the Sofabaton app on your phone",
+                "2. Wait a few seconds for the app to forget the hub",
+                "3. Open the app - it should discover 'X1-HUB-PROXY'",
+                "4. Connect to it and perform actions",
+                "5. Use list_hub_frames() to see captured traffic",
+            ],
+        })
+    else:
+        return json.dumps({
+            "error": "Failed to start hub proxy",
+            "hint": "Check if ports are already in use",
+        })
+
+
+@mcp.tool()
+def stop_hub_proxy() -> str:
+    """
+    Stop the Sofabaton hub proxy.
+
+    Returns:
+        Status message
+    """
+    global _hub_proxy
+
+    if _hub_proxy is None or not _hub_proxy.is_running:
+        return json.dumps({"status": "Hub proxy is not running"})
+
+    _hub_proxy.stop()
+    _hub_proxy = None
+
+    return json.dumps({
+        "status": "stopped",
+        "frames_captured": len(_hub_storage),
+    })
+
+
+@mcp.tool()
+def get_hub_proxy_status() -> str:
+    """
+    Get the current status of the hub proxy.
+
+    Returns:
+        JSON with status information
+    """
+    global _hub_proxy
+
+    is_running = _hub_proxy is not None and _hub_proxy.is_running
+    frame_count = len(_hub_storage)
+
+    return json.dumps({
+        "running": is_running,
+        "captured_frames": frame_count,
+        "hub_ip": _hub_proxy.real_hub_ip if _hub_proxy else None,
+        "proxy_ip": _hub_proxy.local_ip if _hub_proxy else None,
+    })
+
+
+@mcp.tool()
+def list_hub_frames(
+    limit: int = 50,
+    direction_filter: Optional[str] = None,
+) -> str:
+    """
+    List captured Sofabaton hub protocol frames.
+
+    Args:
+        limit: Maximum number of frames to return (default 50)
+        direction_filter: Filter by direction - "A→H" (app to hub) or "H→A" (hub to app)
+
+    Returns:
+        JSON array of captured frames (newest first)
+    """
+    frames = _hub_storage.list(limit=limit, direction_filter=direction_filter)
+
+    return json.dumps([
+        {
+            "id": f.id,
+            "timestamp": f.timestamp,
+            "direction": f.direction,
+            "opcode": f"0x{f.opcode:04X}",
+            "opcode_name": f.opcode_name,
+            "raw_length": f.raw_length,
+            "payload_length": f.payload_length,
+        }
+        for f in frames
+    ], indent=2)
+
+
+@mcp.tool()
+def get_hub_frame(frame_id: str) -> str:
+    """
+    Get full details of a specific captured hub frame.
+
+    Args:
+        frame_id: The ID of the frame to retrieve (e.g., "hf-000001")
+
+    Returns:
+        JSON object with full frame details including hex data
+    """
+    frame = _hub_storage.get(frame_id)
+
+    if frame is None:
+        return json.dumps({"error": f"Frame {frame_id} not found"})
+
+    return json.dumps({
+        "id": frame.id,
+        "timestamp": frame.timestamp,
+        "direction": frame.direction,
+        "opcode": f"0x{frame.opcode:04X}",
+        "opcode_name": frame.opcode_name,
+        "raw_length": frame.raw_length,
+        "payload_length": frame.payload_length,
+        "raw_hex": frame.raw_hex,
+        "payload_hex": frame.payload_hex,
+    }, indent=2)
+
+
+@mcp.tool()
+def search_hub_frames(query: str, limit: int = 50) -> str:
+    """
+    Search captured hub frames by opcode name or hex content.
+
+    Args:
+        query: Search string (matches opcode names or hex content)
+        limit: Maximum results to return
+
+    Returns:
+        JSON array of matching frames
+    """
+    results = _hub_storage.search(query)[:limit]
+
+    return json.dumps([
+        {
+            "id": f.id,
+            "timestamp": f.timestamp,
+            "direction": f.direction,
+            "opcode": f"0x{f.opcode:04X}",
+            "opcode_name": f.opcode_name,
+            "raw_length": f.raw_length,
+        }
+        for f in results
+    ], indent=2)
+
+
+@mcp.tool()
+def clear_hub_frames() -> str:
+    """
+    Clear all captured hub frames.
+
+    Returns:
+        Confirmation message with count of cleared frames
+    """
+    count = _hub_storage.clear()
+    return json.dumps({
+        "status": "cleared",
+        "frames_cleared": count,
+    })
 
 
 def main():
