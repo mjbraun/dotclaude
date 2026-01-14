@@ -136,6 +136,19 @@ else
   echo "WARN: Skipping settings.json configuration (jq not available)"
 fi
 
+# Fix OSC escape sequences to use ST instead of BEL (prevents bells through mosh)
+fix_bashrc_osc() {
+  if [[ -f ~/.bashrc ]]; then
+    # Replace \007 (BEL) with \033\\ (ST) in OSC sequences
+    if grep -q '\\007' ~/.bashrc; then
+      echo "==> Fixing OSC escape sequences in .bashrc (BEL -> ST)..."
+      sed -i.bak 's/\\007/\\033\\\\/g' ~/.bashrc
+      echo "    Backup saved to ~/.bashrc.bak"
+    fi
+  fi
+}
+fix_bashrc_osc
+
 echo ""
 echo "==> Setup complete!"
 echo "    Repo:      $DOTCLAUDE_DIR"
