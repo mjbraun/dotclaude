@@ -96,6 +96,24 @@ else
 '{\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"github:obra/private-journal-mcp\"]}' -s user"
 fi
 
+# Configure local settings.json (append, don't overwrite)
+SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+echo "==> Configuring local settings..."
+if command -v jq &> /dev/null; then
+  if [ -f "$SETTINGS_FILE" ]; then
+    # Merge into existing settings
+    jq '. + {"includeCoAuthoredBy": false}' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" && mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
+  else
+    # Create new settings file
+    echo '{"includeCoAuthoredBy": false}' | jq . > "$SETTINGS_FILE"
+  fi
+  echo "==> Set includeCoAuthoredBy: false in settings.json"
+else
+  echo "WARN: 'jq' not found - skipping settings.json configuration"
+  echo "      Install jq and re-run, or manually add to $SETTINGS_FILE:"
+  echo '      {"includeCoAuthoredBy": false}'
+fi
+
 echo ""
 echo "==> Setup complete!"
 echo "    Repo:      $DOTCLAUDE_DIR"
