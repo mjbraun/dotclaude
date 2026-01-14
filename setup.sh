@@ -84,6 +84,30 @@ if ! command -v npx &> /dev/null; then
   fi
 fi
 
+# Ensure gh (GitHub CLI) is available
+if ! command -v gh &> /dev/null; then
+  echo "==> Installing GitHub CLI (gh)..."
+  if command -v apt-get &> /dev/null; then
+    sudo apt-get update && sudo apt-get install -y gh
+  elif command -v brew &> /dev/null; then
+    brew install gh
+  else
+    echo "WARN: Cannot install gh - please install manually"
+  fi
+fi
+
+# Ensure jq is available
+if ! command -v jq &> /dev/null; then
+  echo "==> Installing jq..."
+  if command -v apt-get &> /dev/null; then
+    sudo apt-get update && sudo apt-get install -y jq
+  elif command -v brew &> /dev/null; then
+    brew install jq
+  else
+    echo "WARN: Cannot install jq - please install manually"
+  fi
+fi
+
 # Add private-journal MCP server
 echo "==> Configuring private-journal MCP server..."
 if command -v claude &> /dev/null; then
@@ -109,9 +133,7 @@ if command -v jq &> /dev/null; then
   fi
   echo "==> Set includeCoAuthoredBy: false in settings.json"
 else
-  echo "WARN: 'jq' not found - skipping settings.json configuration"
-  echo "      Install jq and re-run, or manually add to $SETTINGS_FILE:"
-  echo '      {"includeCoAuthoredBy": false}'
+  echo "WARN: Skipping settings.json configuration (jq not available)"
 fi
 
 echo ""
