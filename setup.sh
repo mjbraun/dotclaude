@@ -149,6 +149,27 @@ fix_bashrc_osc() {
 }
 fix_bashrc_osc
 
+# Move readline bind commands from .bashrc to .inputrc (prevents gibberish on login)
+fix_readline_binds() {
+  if [[ -f ~/.bashrc ]] && grep -q "^bind '\"" ~/.bashrc; then
+    echo "==> Moving readline binds from .bashrc to .inputrc..."
+    # Remove bind commands from .bashrc
+    sed -i 's/^bind.*history-search-backward.*$//' ~/.bashrc
+    sed -i 's/^bind.*history-search-forward.*$//' ~/.bashrc
+    # Clean up empty lines left behind
+    sed -i '/^$/N;/^\n$/d' ~/.bashrc
+  fi
+  # Add to .inputrc if not already present
+  if ! grep -q 'history-search-backward' ~/.inputrc 2>/dev/null; then
+    echo "==> Adding history search bindings to .inputrc..."
+    cat >> ~/.inputrc << 'EOF'
+"\e[A": history-search-backward
+"\e[B": history-search-forward
+EOF
+  fi
+}
+fix_readline_binds
+
 echo ""
 echo "==> Setup complete!"
 echo "    Repo:      $DOTCLAUDE_DIR"
