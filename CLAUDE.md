@@ -71,3 +71,68 @@ If stuck, say "I don't understand X" rather than pretending.
 ## Task Tracking
 
 Use TodoWrite to track work. Never discard tasks without Matt's approval.
+
+## Sprites (Fly.io microVMs)
+
+Sprites are persistent, hardware-isolated Linux microVMs with instant wake from hibernation. They maintain filesystem and memory state between runs, auto-hibernate after 30s idle.
+
+### API Access
+
+Base URL: `https://api.sprites.dev/v1`
+Auth: `Authorization: Bearer $SPRITES_TOKEN`
+
+### Core Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/sprites` | POST | Create sprite (`{"name": "..."}`) |
+| `/sprites` | GET | List sprites |
+| `/sprites/{name}` | GET/PUT/DELETE | Manage sprite |
+| `/sprites/{name}/exec?cmd={cmd}` | POST | Execute command |
+| `/sprites/{name}/exec` | WSS | Interactive terminal |
+| `/sprites/{name}/fs/read?path=...` | GET | Read file |
+| `/sprites/{name}/fs/write?path=...` | POST | Write file (body = content) |
+| `/sprites/{name}/fs/list?path=...` | GET | List directory |
+| `/sprites/{name}/checkpoints` | GET/POST | List/create snapshots |
+
+### Quick Operations
+
+```bash
+# List sprites
+curl -H "Authorization: Bearer $SPRITES_TOKEN" https://api.sprites.dev/v1/sprites
+
+# Run command
+curl -X POST -H "Authorization: Bearer $SPRITES_TOKEN" \
+  "https://api.sprites.dev/v1/sprites/SPRITE/exec?cmd=uname+-a"
+
+# Read file
+curl -H "Authorization: Bearer $SPRITES_TOKEN" \
+  "https://api.sprites.dev/v1/sprites/SPRITE/fs/read?path=/etc/hostname"
+
+# Write file
+curl -X POST -H "Authorization: Bearer $SPRITES_TOKEN" \
+  --data-binary "content here" \
+  "https://api.sprites.dev/v1/sprites/SPRITE/fs/write?path=/tmp/test&mode=0644"
+```
+
+### Public Sprite URLs
+
+Sprites can expose HTTP on port 8080 at: `https://{sprite-name}.sprites.app/`
+
+### Working Inside a Sprite
+
+When Claude Code runs inside a sprite, context files are at:
+- `/.sprite/llm.txt` - Platform behavior
+- `/.sprite/llm-dev.txt` - Language runtimes
+- `/.sprite/logs/services/` - Service logs
+- `/.sprite/policy/network.json` - Network policy (read-only)
+
+Use `sprite-env services` for long-running processes, `sprite-env checkpoints` for snapshots.
+
+### Slash Commands
+
+- `/sprite-list` - List your sprites
+- `/sprite-exec <name> <cmd>` - Run command on sprite
+- `/sprite-read <name> <path>` - Read file from sprite
+- `/sprite-write <name> <path>` - Write file to sprite (prompts for content)
+- `/sprite-logs <name>` - Tail recent service logs

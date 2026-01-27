@@ -38,6 +38,102 @@ for file in CLAUDE.md; do
   fi
 done
 
+# Sprite-specific: Add tailscale docs to CLAUDE.md
+if [ "$USER" = "sprite" ]; then
+  echo "==> Detected sprite environment, adding tailscale docs to CLAUDE.md..."
+  # Convert symlink to real file so we can append
+  if [ -L "$CLAUDE_DIR/CLAUDE.md" ]; then
+    cp --remove-destination "$(readlink -f "$CLAUDE_DIR/CLAUDE.md")" "$CLAUDE_DIR/CLAUDE.md"
+  fi
+  # Append tailscale section if not already present
+  if ! grep -q "Tailscale in Sprites" "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null; then
+    cat >> "$CLAUDE_DIR/CLAUDE.md" << 'TAILSCALE_EOF'
+
+## Tailscale in Sprites
+
+Sprites run in containers without systemd, so Tailscale won't auto-start and won't restart if it crashes.
+
+**Important**: Even with tailscale running, the sprite won't be reachable until a reusable, tagged auth key is added to your Tailscale ACL with the appropriate permissions. Ask Matt to configure this if needed.
+
+### Check if Tailscale is running
+
+```bash
+tailscale status
+```
+
+If you get "failed to connect to local tailscaled", the daemon isn't running.
+
+### Quick start (if already authenticated)
+
+```bash
+sudo tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+```
+
+### First-time setup (requires human for browser auth)
+
+1. Start the daemon:
+```bash
+sudo tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+```
+
+2. Authenticate (opens browser URL):
+```bash
+sudo tailscale up --hostname=YOUR-HOSTNAME
+```
+
+3. Optional - serve a local port via HTTPS:
+```bash
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8000
+```
+
+### Auto-restart setup
+
+Create `~/.local/bin/tailscaled-supervisor`:
+
+```bash
+#!/bin/bash
+# ABOUTME: Keeps tailscaled running, restarts on crash with backoff
+
+ARGS="--state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock"
+PIDFILE="/var/run/tailscale/tailscaled-supervisor.pid"
+
+[ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null && exit 0
+
+if [ "$1" != "--fg" ]; then
+    nohup "$0" --fg >> /var/log/tailscaled-supervisor.log 2>&1 &
+    echo $! | sudo tee "$PIDFILE" > /dev/null
+    exit 0
+fi
+
+echo $$ | sudo tee "$PIDFILE" > /dev/null
+trap 'sudo pkill -x tailscaled; sudo rm -f "$PIDFILE"; exit 0' SIGTERM SIGINT
+
+while true; do
+    pgrep -x tailscaled > /dev/null || { sudo tailscaled $ARGS & sleep 3; }
+    sleep 10
+done
+```
+
+Make executable and add to `~/.zshrc`:
+
+```bash
+chmod +x ~/.local/bin/tailscaled-supervisor
+
+echo 'if [ -x "$HOME/.local/bin/tailscaled-supervisor" ]; then
+    "$HOME/.local/bin/tailscaled-supervisor" 2>/dev/null
+fi' >> ~/.zshrc
+```
+
+### Troubleshooting
+
+- DNS warnings about /etc/resolv.conf: Normal in containers - networking still works
+- Kill daemon only (not supervisor): `sudo pkill -x tailscaled`
+- View supervisor log: `cat /var/log/tailscaled-supervisor.log`
+TAILSCALE_EOF
+    echo "==> Added tailscale documentation section"
+  fi
+fi
+
 # Symlink skills directory (merge-friendly approach)
 if [ -d "$DOTCLAUDE_DIR/skills" ]; then
   mkdir -p "$CLAUDE_DIR/skills"
